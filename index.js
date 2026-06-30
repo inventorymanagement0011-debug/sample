@@ -54,10 +54,11 @@ function buildManagerMessage(order) {
     ? `${addrObj.address1 || ""}${addrObj.address2 ? ", " + addrObj.address2 : ""}, ${addrObj.city || ""}`.trim()
     : "No address (pickup or N/A)";
 
-  // Name can come from customer object, shipping/billing address, or be missing
-  // entirely on guest/test orders.
+  // Prioritize the name typed at checkout (billing/shipping address) over
+  // the linked customer profile, since the customer account can be a
+  // placeholder/internal account rather than the actual person ordering.
   const nameSource =
-    order.customer || order.shipping_address || order.billing_address || {};
+    order.shipping_address || order.billing_address || order.customer || {};
   const customerName =
     `${nameSource.first_name || ""} ${nameSource.last_name || ""}`.trim() ||
     order.contact_email ||
@@ -160,7 +161,7 @@ app.post("/webhooks/orders-create", async (req, res) => {
       (order.customer && order.customer.phone);
     if (customerPhone) {
       const nameSource =
-        order.customer || order.shipping_address || order.billing_address || {};
+        order.shipping_address || order.billing_address || order.customer || {};
       const firstName = nameSource.first_name || "there";
 
       await sendWhatsAppTemplate(customerPhone, ORDER_CONFIRMATION_TEMPLATE_SID, {
