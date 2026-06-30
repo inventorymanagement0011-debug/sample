@@ -46,15 +46,31 @@ function buildManagerMessage(order) {
     .map((item) => `• ${item.quantity}x ${item.title} - Rs.${item.price}`)
     .join("\n");
 
-  const address = order.shipping_address
-    ? `${order.shipping_address.address1}, ${order.shipping_address.city}`
+  // Address can come from shipping_address OR billing_address depending on
+  // checkout type (pickup orders often have no shipping_address at all).
+  const addrObj = order.shipping_address || order.billing_address;
+  const address = addrObj
+    ? `${addrObj.address1 || ""}${addrObj.address2 ? ", " + addrObj.address2 : ""}, ${addrObj.city || ""}`.trim()
     : "No address (pickup or N/A)";
 
-  const customerName = order.customer
-    ? `${order.customer.first_name || ""} ${order.customer.last_name || ""}`.trim()
-    : order.contact_email || "Guest";
+  // Name can come from customer object, shipping/billing address, or be missing
+  // entirely on guest/test orders.
+  const nameSource =
+    order.customer || order.shipping_address || order.billing_address || {};
+  const customerName =
+    `${nameSource.first_name || ""} ${nameSource.last_name || ""}`.trim() ||
+    order.contact_email ||
+    order.email ||
+    "Guest";
 
-  const customerPhone = order.phone || (order.customer && order.customer.phone) || "Not provided";
+  // Phone can be on the order itself, the shipping/billing address, or the
+  // customer object - check all of them.
+  const customerPhone =
+    order.phone ||
+    (order.shipping_address && order.shipping_address.phone) ||
+    (order.billing_address && order.billing_address.phone) ||
+    (order.customer && order.customer.phone) ||
+    "Not provided";
 
   return (
     `🛎️ *New Order - Kurly Katch* #${order.order_number}\n\n` +
@@ -68,9 +84,9 @@ function buildManagerMessage(order) {
 }
 
 function buildCustomerMessage(order) {
-  const customerName = order.customer
-    ? order.customer.first_name || "there"
-    : "there";
+  const nameSource =
+    order.customer || order.shipping_address || order.billing_address || {};
+  const customerName = nameSource.first_name || "there";
 
   return (
     `Hi ${customerName}! 👋 Thank you for your order from *Kurly Katch* (#${order.order_number}).\n\n` +
@@ -110,7 +126,11 @@ app.post("/webhooks/orders-create", async (req, res) => {
     await sendWhatsAppMessage(MANAGER_WHATSAPP_NUMBER, managerMessage);
 
     // Send customer confirmation (only if we have a phone number on the order)
-    const customerPhone = order.phone || (order.customer && order.customer.phone);
+    const customerPhone =
+      order.phone ||
+      (order.shipping_address && order.shipping_address.phone) ||
+      (order.billing_address && order.billing_address.phone) ||
+      (order.customer && order.customer.phone);
     if (customerPhone) {
       const customerMessage = buildCustomerMessage(order);
       await sendWhatsAppMessage(customerPhone, customerMessage);
