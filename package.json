@@ -1,0 +1,16 @@
+{
+  "name": "kurlykatch-whatsapp-order-bot",
+  "version": "1.0.0",
+  "description": "Sends Shopify order details to manager and customer via WhatsApp using Twilio.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "twilio": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

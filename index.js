@@ -1,0 +1,130 @@
+// Kurly Katch - Shopify Order to WhatsApp Notifier
+// Receives a Shopify "order creation" webhook and sends WhatsApp messages
+// to the manager and the customer using Twilio's WhatsApp API.
+
+const express = require("express");
+const crypto = require("crypto");
+const twilio = require("twilio");
+
+const app = express();
+
+// IMPORTANT: Shopify webhook verification needs the RAW request body,
+// so we capture it before any JSON parsing happens.
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
+
+// ---------- CONFIG (set these as environment variables, never hard-code) ----------
+const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET; // from Shopify webhook setup
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM; // e.g. "whatsapp:+14155238886"
+const MANAGER_WHATSAPP_NUMBER = process.env.MANAGER_WHATSAPP_NUMBER; // e.g. "whatsapp:+923314440625"
+
+const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+
+// ---------- Verify the request actually came from Shopify ----------
+function verifyShopifyWebhook(req) {
+  const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
+  if (!hmacHeader || !req.rawBody) return false;
+
+  const digest = crypto
+    .createHmac("sha256", SHOPIFY_WEBHOOK_SECRET)
+    .update(req.rawBody)
+    .digest("base64");
+
+  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(hmacHeader));
+}
+
+// ---------- Build human-readable message text from order JSON ----------
+function buildManagerMessage(order) {
+  const items = order.line_items
+    .map((item) => `• ${item.quantity}x ${item.title} - Rs.${item.price}`)
+    .join("\n");
+
+  const address = order.shipping_address
+    ? `${order.shipping_address.address1}, ${order.shipping_address.city}`
+    : "No address (pickup or N/A)";
+
+  const customerName = order.customer
+    ? `${order.customer.first_name || ""} ${order.customer.last_name || ""}`.trim()
+    : order.contact_email || "Guest";
+
+  const customerPhone = order.phone || (order.customer && order.customer.phone) || "Not provided";
+
+  return (
+    `🛎️ *New Order - Kurly Katch* #${order.order_number}\n\n` +
+    `*Customer:* ${customerName}\n` +
+    `*Phone:* ${customerPhone}\n` +
+    `*Address:* ${address}\n\n` +
+    `*Items:*\n${items}\n\n` +
+    `*Total:* Rs.${order.total_price}\n` +
+    `*Payment:* ${order.financial_status}\n`
+  );
+}
+
+function buildCustomerMessage(order) {
+  const customerName = order.customer
+    ? order.customer.first_name || "there"
+    : "there";
+
+  return (
+    `Hi ${customerName}! 👋 Thank you for your order from *Kurly Katch* (#${order.order_number}).\n\n` +
+    `Your total is Rs.${order.total_price}. We're preparing it now and will notify you when it's on the way. ` +
+    `For any questions, just reply to this message or call us directly.`
+  );
+}
+
+// ---------- Send a WhatsApp message via Twilio ----------
+async function sendWhatsAppMessage(to, body) {
+  if (!to) {
+    console.log("Skipped sending - no destination number provided.");
+    return;
+  }
+  await twilioClient.messages.create({
+    from: TWILIO_WHATSAPP_FROM,
+    to: to.startsWith("whatsapp:") ? to : `whatsapp:${to}`,
+    body,
+  });
+}
+
+// ---------- Webhook endpoint ----------
+app.post("/webhooks/orders-create", async (req, res) => {
+  try {
+    if (!verifyShopifyWebhook(req)) {
+      console.warn("Webhook verification failed - rejecting request.");
+      return res.status(401).send("Invalid signature");
+    }
+
+    const order = req.body;
+
+    // Respond to Shopify immediately so it doesn't retry/timeout
+    res.status(200).send("OK");
+
+    // Send manager notification
+    const managerMessage = buildManagerMessage(order);
+    await sendWhatsAppMessage(MANAGER_WHATSAPP_NUMBER, managerMessage);
+
+    // Send customer confirmation (only if we have a phone number on the order)
+    const customerPhone = order.phone || (order.customer && order.customer.phone);
+    if (customerPhone) {
+      const customerMessage = buildCustomerMessage(order);
+      await sendWhatsAppMessage(customerPhone, customerMessage);
+    }
+
+    console.log(`Order #${order.order_number} processed and WhatsApp messages sent.`);
+  } catch (err) {
+    console.error("Error processing webhook:", err);
+    // Note: response already sent above, so we just log here
+  }
+});
+
+// Simple health check route
+app.get("/", (req, res) => res.send("Kurly Katch WhatsApp order bot is running."));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
