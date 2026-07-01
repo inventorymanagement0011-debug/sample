@@ -137,13 +137,6 @@ app.post("/webhooks/orders-create", async (req, res) => {
 
     const order = req.body;
 
-    // TEMP DEBUG: log the relevant raw fields so we can see exactly what
-    // Shopify is sending. Remove this once the name issue is resolved.
-    console.log("DEBUG order.customer:", JSON.stringify(order.customer));
-    console.log("DEBUG order.shipping_address:", JSON.stringify(order.shipping_address));
-    console.log("DEBUG order.billing_address:", JSON.stringify(order.billing_address));
-    console.log("DEBUG order.email / contact_email:", order.email, order.contact_email);
-
     // Respond to Shopify immediately so it doesn't retry/timeout
     res.status(200).send("OK");
 
@@ -151,15 +144,16 @@ app.post("/webhooks/orders-create", async (req, res) => {
     const managerMessage = buildManagerMessage(order);
     await sendWhatsAppMessage(MANAGER_WHATSAPP_NUMBER, managerMessage);
 
-    // Send customer confirmation (only if we have a phone number on the order)
-    // Uses an approved WhatsApp template since this is the first message to
-    // the customer and free-form text isn't allowed outside an active session.
+    // Send customer confirmation only if a template SID has been configured.
+    // (Requires a Twilio-approved WhatsApp template — set ORDER_CONFIRMATION_TEMPLATE_SID
+    // in Render environment variables once your template is approved in Twilio.)
     const customerPhone =
       order.phone ||
       (order.shipping_address && order.shipping_address.phone) ||
       (order.billing_address && order.billing_address.phone) ||
       (order.customer && order.customer.phone);
-    if (customerPhone) {
+
+    if (customerPhone && ORDER_CONFIRMATION_TEMPLATE_SID) {
       const nameSource =
         order.shipping_address || order.billing_address || order.customer || {};
       const firstName = nameSource.first_name || "there";
@@ -169,6 +163,8 @@ app.post("/webhooks/orders-create", async (req, res) => {
         2: String(order.order_number),
         3: String(order.total_price),
       });
+    } else if (!ORDER_CONFIRMATION_TEMPLATE_SID) {
+      console.log("Customer WhatsApp skipped — ORDER_CONFIRMATION_TEMPLATE_SID not set yet.");
     }
 
     console.log(`Order #${order.order_number} processed and WhatsApp messages sent.`);
